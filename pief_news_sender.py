@@ -1,6 +1,7 @@
 import csv
 import html
 import json
+import os
 import re
 import smtplib
 import sqlite3
@@ -14,22 +15,34 @@ from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = BASE_DIR / "config.json"
 DB_PATH = BASE_DIR / "sent_news.db"
 
 
 def load_config():
-    if not CONFIG_PATH.exists():
-        raise FileNotFoundError("config.json 파일이 없습니다.")
-
-    with open(CONFIG_PATH, "r", encoding="utf-8") as file:
-        return json.load(file)
+    return {
+        "query": os.environ.get("QUERY", "평택시"),
+        "send_when_empty": True,
+        "max_pages": 10,
+        "naver_client_id": os.environ["NAVER_CLIENT_ID"],
+        "naver_client_secret": os.environ["NAVER_CLIENT_SECRET"],
+        "email": {
+            "enabled": True,
+            "smtp_server": "smtp.naver.com",
+            "smtp_port": 587,
+            "sender_email": os.environ["SMTP_EMAIL"],
+            "sender_password": os.environ["SMTP_PASSWORD"],
+            "receiver_emails": [
+                email.strip()
+                for email in os.environ["RECEIVER_EMAILS"].split(",")
+                if email.strip()
+            ]
+        }
+    }
 
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS sent_news (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +53,6 @@ def init_db():
         sent_at TEXT NOT NULL
     )
     """)
-
     conn.commit()
     return conn
 
@@ -96,11 +108,7 @@ def extract_press_name_from_url(url):
         pass
 
     domain = urllib.parse.urlparse(url).netloc.replace("www.", "")
-
-    if domain:
-        return domain
-
-    return "언론사 미확인"
+    return domain or "언론사 미확인"
 
 
 def fetch_naver_yesterday_news(config, query):
@@ -108,7 +116,6 @@ def fetch_naver_yesterday_news(config, query):
     client_secret = config["naver_client_secret"].strip()
 
     yesterday = datetime.now().date() - timedelta(days=1)
-
     display = 100
     max_pages = int(config.get("max_pages", 10))
 
@@ -187,14 +194,9 @@ def is_already_sent(conn, link):
 
 def mark_as_sent(conn, news):
     cursor = conn.cursor()
-
     cursor.execute("""
     INSERT OR IGNORE INTO sent_news (
-        title,
-        link,
-        source,
-        published,
-        sent_at
+        title, link, source, published, sent_at
     )
     VALUES (?, ?, ?, ?, ?)
     """, (
@@ -204,25 +206,7 @@ def mark_as_sent(conn, news):
         news.get("published", ""),
         datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ))
-
     conn.commit()
-
-
-def save_log_csv(news_list):
-    log_path = BASE_DIR / "latest_news_log.csv"
-
-    with open(log_path, "w", newline="", encoding="utf-8-sig") as file:
-        writer = csv.writer(file)
-        writer.writerow(["title", "source", "published", "description", "link"])
-
-        for news in news_list:
-            writer.writerow([
-                news.get("title", ""),
-                news.get("source", ""),
-                news.get("published", ""),
-                news.get("description", ""),
-                news.get("link", "")
-            ])
 
 
 def build_email_body(news_list, query, report_date):
@@ -233,7 +217,7 @@ def build_email_body(news_list, query, report_date):
 <p>안녕하세요.</p>
 <p><b>{report_date}</b> 등록 기준 <b>{query}</b> 관련 네이버 신규 뉴스가 없습니다.</p>
 <p style="color:#777;font-size:12px;margin-top:20px;">
-이 메일은 Python 자동화 프로그램으로 발송되었습니다.
+이 메일은 GitHub Actions 자동화 프로그램으로 발송되었습니다.
 </p>
 </body>
 </html>
@@ -279,7 +263,7 @@ def build_email_body(news_list, query, report_date):
 </table>
 
 <p style="color:#777;font-size:12px;margin-top:20px;">
-이 메일은 Python 자동화 프로그램으로 발송되었습니다.
+이 메일은 GitHub Actions 자동화 프로그램으로 발송되었습니다.
 </p>
 </body>
 </html>
@@ -329,8 +313,6 @@ def main():
     ]
 
     print("신규 뉴스:", len(new_news))
-
-    save_log_csv(new_news)
 
     if not new_news and not send_when_empty:
         print("어제 신규 뉴스가 없어 발송하지 않았습니다.")
