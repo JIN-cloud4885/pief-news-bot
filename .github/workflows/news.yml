@@ -2,7 +2,7 @@ name: PIEF News Sender
 
 on:
   schedule:
-    - cron: '50 9 * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
